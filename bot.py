@@ -60,9 +60,54 @@ MARCADORES_FRACOS = [
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+MODELO_IA = os.environ.get("GEMINI_MODELO", "gemini-3-flash-preview").strip()
 
 ARQUIVO_VISTO = "visto.json"
 LIMITE_MEMORIA = 400
+
+
+
+def traduzir(titulo):
+    """Traduz o titulo para portugues. Se falhar, devolve o original."""
+    if not titulo or not titulo.strip() or not GEMINI_KEY:
+        return titulo
+
+    pedido = (
+        "Traduza o titulo de noticia abaixo para portugues do Brasil. "
+        "Responda SOMENTE com a traducao, sem aspas e sem comentarios. "
+        "Mantenha nomes proprios e siglas. Se o marcador BREAKING, JUST IN, "
+        "ALERT, URGENT ou DEVELOPING aparecer no inicio, traduza-o para "
+        "URGENTE, AGORA, ALERTA, URGENTE ou EM DESENVOLVIMENTO, "
+        "respectivamente.\n\n" + titulo
+    )
+
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           + MODELO_IA + ":generateContent")
+    corpo = {
+        "contents": [{"parts": [{"text": pedido}]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 400},
+    }
+
+    for _ in range(2):
+        try:
+            r = requests.post(
+                url,
+                headers={"x-goog-api-key": GEMINI_KEY,
+                         "Content-Type": "application/json"},
+                json=corpo, timeout=25,
+            )
+            if r.status_code != 200:
+                print("  traducao HTTP %s: %s" % (r.status_code, r.text[:160]))
+                time.sleep(2)
+                continue
+            saida = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            return saida if saida else titulo
+        except Exception as e:
+            print("  traducao falhou: %s" % e)
+            time.sleep(2)
+
+    return titulo
 
 
 def carregar_vistos():
@@ -155,6 +200,13 @@ def formatar_idade(publicado, agora):
 
 
 def enviar_telegram(item, agora):
+    original = item["titulo"]
+    traduzido = traduzir(original)
+
+    corpo = html.escape(traduzido)
+    if traduzido.strip().lower() != original.strip().lower():
+        corpo += "\n<i>%s</i>" % html.escape(original)
+
     texto = (
         "\U0001F534 <b>%s</b>\n\n"
         "%s\n\n"
@@ -162,7 +214,7 @@ def enviar_telegram(item, agora):
         "%s"
     ) % (
         html.escape(item["canal"]),
-        html.escape(item["titulo"]),
+        corpo,
         formatar_idade(item["publicado"], agora),
         item["link"],
     )
