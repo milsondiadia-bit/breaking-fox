@@ -1,0 +1,36 @@
+name: Fox Breaking
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rodar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Rodar bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
+
+      - name: Salvar memoria
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add visto.json
+          git diff --staged --quiet || git commit -m "atualiza memoria"
+          git push
