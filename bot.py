@@ -67,6 +67,24 @@ ARQUIVO_VISTO = "visto.json"
 LIMITE_MEMORIA = 400
 
 
+def _extrair_texto(resposta):
+    """Le o texto da resposta do Gemini sem quebrar se vier vazia."""
+    candidatos = resposta.get("candidates") or []
+    if not candidatos:
+        motivo = resposta.get("promptFeedback", {}).get("blockReason", "?")
+        print("  traducao: sem candidatos (motivo: %s)" % motivo)
+        return ""
+
+    cand = candidatos[0]
+    partes = (cand.get("content") or {}).get("parts") or []
+    texto = "".join(p.get("text", "") for p in partes).strip()
+
+    if not texto:
+        print("  traducao: resposta vazia (finishReason: %s)"
+              % cand.get("finishReason", "?"))
+
+    return texto
+
 
 def traduzir(titulo):
     """Traduz o titulo para portugues. Se falhar, devolve o original."""
@@ -84,9 +102,16 @@ def traduzir(titulo):
 
     url = ("https://generativelanguage.googleapis.com/v1beta/models/"
            + MODELO_IA + ":generateContent")
+
+    # thinkingLevel low + teto alto: os tokens de raciocinio do Gemini 3
+    # sao descontados do maxOutputTokens. Com teto baixo a resposta vem vazia.
     corpo = {
         "contents": [{"parts": [{"text": pedido}]}],
-        "generationConfig": {"temperature": 0, "maxOutputTokens": 400},
+        "generationConfig": {
+            "temperature": 1,
+            "maxOutputTokens": 2000,
+            "thinkingConfig": {"thinkingLevel": "low"},
+        },
     }
 
     for _ in range(2):
@@ -95,14 +120,16 @@ def traduzir(titulo):
                 url,
                 headers={"x-goog-api-key": GEMINI_KEY,
                          "Content-Type": "application/json"},
-                json=corpo, timeout=25,
+                json=corpo, timeout=30,
             )
             if r.status_code != 200:
-                print("  traducao HTTP %s: %s" % (r.status_code, r.text[:160]))
+                print("  traducao HTTP %s: %s" % (r.status_code, r.text[:200]))
                 time.sleep(2)
                 continue
-            saida = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            return saida if saida else titulo
+            saida = _extrair_texto(r.json())
+            if saida:
+                return saida
+            time.sleep(2)
         except Exception as e:
             print("  traducao falhou: %s" % e)
             time.sleep(2)
@@ -246,6 +273,7 @@ def main():
     print("=" * 60)
     print("FOX BREAKING - %s UTC" % agora.strftime("%Y-%m-%d %H:%M"))
     print("Ja vistos: %d | Filtro: %s" % (len(vistos), "SO BREAKING" if SO_BREAKING else "TUDO"))
+    print("Traducao: %s | Modelo: %s" % ("LIGADA" if GEMINI_KEY else "DESLIGADA", MODELO_IA))
     print("=" * 60)
 
     todos = []
