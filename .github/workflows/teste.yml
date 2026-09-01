@@ -1,0 +1,45 @@
+name: Teste Traducao
+
+on:
+  workflow_dispatch:
+
+jobs:
+  teste:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Testar traducao
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python - <<'PY'
+          import bot
+
+          exemplos = [
+              "BREAKING: Trump announces new tariffs on China as markets tumble",
+              "JUST IN: Massive explosion reported near government building",
+              "Zelenskyy delivers address after emergency NATO meeting",
+          ]
+
+          print("=" * 60)
+          print("Chave Gemini presente:", bool(bot.GEMINI_KEY))
+          print("Modelo:", bot.MODELO_IA)
+          print("=" * 60)
+
+          for titulo in exemplos:
+              print("")
+              print("ORIGINAL : " + titulo)
+              print("TRADUZIDO: " + bot.traduzir(titulo))
+          PY
