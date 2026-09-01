@@ -54,6 +54,15 @@ MARCADORES_FRACOS = [
     "press conference",
 ]
 
+# Modelos de traducao, na ordem de tentativa.
+# O primeiro e o mais leve e com maior cota gratuita.
+# Se falhar por cota (429) ou sobrecarga (503), cai para o proximo.
+MODELOS = [
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-2.0-flash",
+]
+
 # =====================================================================
 # NAO PRECISA MEXER DAQUI PARA BAIXO
 # =====================================================================
@@ -61,10 +70,12 @@ MARCADORES_FRACOS = [
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-MODELO_IA = os.environ.get("GEMINI_MODELO", "gemini-3-flash-preview").strip()
 
 ARQUIVO_VISTO = "visto.json"
 LIMITE_MEMORIA = 400
+
+# Modelos que ja falharam nesta execucao - nao adianta insistir neles.
+_MODELOS_QUEIMADOS = set()
 
 
 def _extrair_texto(resposta):
@@ -72,7 +83,7 @@ def _extrair_texto(resposta):
     candidatos = resposta.get("candidates") or []
     if not candidatos:
         motivo = resposta.get("promptFeedback", {}).get("blockReason", "?")
-        print("  traducao: sem candidatos (motivo: %s)" % motivo)
+        print("    sem candidatos (motivo: %s)" % motivo)
         return ""
 
     cand = candidatos[0]
@@ -80,10 +91,53 @@ def _extrair_texto(resposta):
     texto = "".join(p.get("text", "") for p in partes).strip()
 
     if not texto:
-        print("  traducao: resposta vazia (finishReason: %s)"
+        print("    resposta vazia (finishReason: %s)"
               % cand.get("finishReason", "?"))
 
     return texto
+
+
+def _chamar_modelo(modelo, pedido):
+    """Uma tentativa em um modelo. Devolve (texto, trocar_de_modelo)."""
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           + modelo + ":generateContent")
+
+    # thinkingLevel low + teto alto: os tokens de raciocinio do Gemini 3
+    # sao descontados do maxOutputTokens. Com teto baixo a resposta vem vazia.
+    corpo = {
+        "contents": [{"parts": [{"text": pedido}]}],
+        "generationConfig": {
+            "temperature": 1,
+            "maxOutputTokens": 2000,
+            "thinkingConfig": {"thinkingLevel": "low"},
+        },
+    }
+
+    try:
+        r = requests.post(
+            url,
+            headers={"x-goog-api-key": GEMINI_KEY,
+                     "Content-Type": "application/json"},
+            json=corpo, timeout=30,
+        )
+    except Exception as e:
+        print("    [%s] erro de rede: %s" % (modelo, e))
+        return "", False
+
+    if r.status_code == 200:
+        return _extrair_texto(r.json()), False
+
+    if r.status_code in (429, 503):
+        print("    [%s] HTTP %s - cota ou sobrecarga, trocando de modelo"
+              % (modelo, r.status_code))
+        return "", True
+
+    if r.status_code == 404:
+        print("    [%s] HTTP 404 - modelo indisponivel nesta conta" % modelo)
+        return "", True
+
+    print("    [%s] HTTP %s: %s" % (modelo, r.status_code, r.text[:160]))
+    return "", False
 
 
 def traduzir(titulo):
@@ -100,40 +154,25 @@ def traduzir(titulo):
         "respectivamente.\n\n" + titulo
     )
 
-    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-           + MODELO_IA + ":generateContent")
+    for modelo in MODELOS:
+        if modelo in _MODELOS_QUEIMADOS:
+            continue
 
-    # thinkingLevel low + teto alto: os tokens de raciocinio do Gemini 3
-    # sao descontados do maxOutputTokens. Com teto baixo a resposta vem vazia.
-    corpo = {
-        "contents": [{"parts": [{"text": pedido}]}],
-        "generationConfig": {
-            "temperature": 1,
-            "maxOutputTokens": 2000,
-            "thinkingConfig": {"thinkingLevel": "low"},
-        },
-    }
+        # Duas tentativas no mesmo modelo antes de desistir dele.
+        for _ in range(2):
+            texto, trocar = _chamar_modelo(modelo, pedido)
 
-    for _ in range(2):
-        try:
-            r = requests.post(
-                url,
-                headers={"x-goog-api-key": GEMINI_KEY,
-                         "Content-Type": "application/json"},
-                json=corpo, timeout=30,
-            )
-            if r.status_code != 200:
-                print("  traducao HTTP %s: %s" % (r.status_code, r.text[:200]))
-                time.sleep(2)
-                continue
-            saida = _extrair_texto(r.json())
-            if saida:
-                return saida
-            time.sleep(2)
-        except Exception as e:
-            print("  traducao falhou: %s" % e)
-            time.sleep(2)
+            if texto:
+                return texto
 
+            if trocar:
+                _MODELOS_QUEIMADOS.add(modelo)
+                time.sleep(3)
+                break
+
+            time.sleep(3)
+
+    print("    traducao indisponivel - mantendo titulo original")
     return titulo
 
 
@@ -273,7 +312,8 @@ def main():
     print("=" * 60)
     print("FOX BREAKING - %s UTC" % agora.strftime("%Y-%m-%d %H:%M"))
     print("Ja vistos: %d | Filtro: %s" % (len(vistos), "SO BREAKING" if SO_BREAKING else "TUDO"))
-    print("Traducao: %s | Modelo: %s" % ("LIGADA" if GEMINI_KEY else "DESLIGADA", MODELO_IA))
+    print("Traducao: %s | Modelos: %s"
+          % ("LIGADA" if GEMINI_KEY else "DESLIGADA", ", ".join(MODELOS)))
     print("=" * 60)
 
     todos = []
