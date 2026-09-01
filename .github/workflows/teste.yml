@@ -35,7 +35,7 @@ jobs:
 
           print("=" * 60)
           print("Chave Gemini presente:", bool(bot.GEMINI_KEY))
-          print("Modelo:", bot.MODELO_IA)
+          print("Modelos:", ", ".join(bot.MODELOS))
           print("=" * 60)
 
           for titulo in exemplos:
